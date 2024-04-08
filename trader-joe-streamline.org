@@ -1,6 +1,6 @@
 #+title: Trader Joe v2 Streamline
 * Trader Joe Substream
-** Constants
+** Constants :Code:
 
 Just some globally available constants we have available
 
@@ -12,17 +12,17 @@ const DEX_LENS_ADDRESS = 0x0A5077D8dc51e27Ad536847b0CF558165BA9AD1b;
 const WAVAX_ADDRESS = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 #+end_src
 
-** Map Modules
+** Map Modules :Code:
 *** Map Events
 This module is the start of the data pipeline. It takes a block in, and returns a map containing all of the events we are tracking.
 
 #+begin_src streamline :tangle src/TraderJoe.strm
 mfn map_events(BLOCK) {
     let lb_factory_events = #{
-        pairs_created: lb_factory::LbPairCreated(BLOCK, []),
-        flash_loan_fee_set: lb_factory::FlashLoanFeeSet(BLOCK, []),
-        fee_param_set: lb_factory::FeeParametersSet(BLOCK, []),
-        ignored_pair_changes: lb_factory::LbPairIgnoredStateChanged(BLOCK, []),
+        pairs_created: lb_factory::LbPairCreated(BLOCK, [global::FACTORY_ADDRESS]),
+        flash_loan_fee_set: lb_factory::FlashLoanFeeSet(BLOCK, [global::FACTORY_ADDRESS]),
+        fee_param_set: lb_factory::FeeParametersSet(BLOCK, [global::FACTORY_ADDRESS]),
+        ignored_pair_changes: lb_factory::LbPairIgnoredStateChanged(BLOCK, [global::FACTORY_ADDRESS]),
     };
 
     let lb_pair_events = #{
@@ -36,10 +36,10 @@ mfn map_events(BLOCK) {
 }
 #+end_src
 
-** Store Modules
+** Store Modules :Code:
 *** Store Pairs Created
 #+begin_src streamline :tangle src/TraderJoe.strm
-sfn pair_count(map_events,s:add) {
+sfn pair_count(map_events, s:add) {
     let pairs_created = map_events?.lb_factory?.pairs_created ?? [];
 
     for pair in pairs_created {
@@ -50,7 +50,7 @@ sfn pair_count(map_events,s:add) {
 
 *** Store Ignored Pairs
 #+begin_src streamline :tangle src/TraderJoe.strm
-sfn ignored_pairs(map_events,s:set) {
+sfn ignored_pairs(map_events, s:set) {
     let pair_changes = map_events?.lb_factory?.ignored_pair_changes ?? [];
 
     for pair in pair_changes {
@@ -74,15 +74,12 @@ sfn avax_price(map_events,s:set) {
 There are a number of token fields we need to index, but we don't want to put them into a single store bc it will blow up.
 **** Store Meta
 #+begin_src streamline :tangle src/TraderJoe.strm
-sfn token_meta(map_events,s:setOnce) {
+sfn token_meta(map_events, s:setOnce) {
     let swaps = map_events?.lb_pair?.swaps ?? [];
 
     for swap in swaps {
-        let token = swap.tx.address;
-        let meta = get_token_meta(token);
-        if type_of(meta) != "()" {
-            s.set(token, meta);
-        }
+        let token = swap.tx_meta.address;
+        s.set(token, token.get_token_meta());
     }
 }
 #+end_src
@@ -93,15 +90,12 @@ sfn token_numeric_data(map_events,s:setOnce) {
 
     for swap in swaps {
         let token = swap.tx.address;
-        let meta = get_token_meta(token);
-        if type_of(meta) != "()" {
-            s.set(token, meta);
-        }
+        // todo!
     }
 }
 #+end_src
 ** Sinks
-*** Graph Out
+*** Graph Out :Code:
 This module is responsible for outputting to the subgraph.
 
 The way this module works is we have an output array, which is responsible for emitting the entity changes to take in the database. So this module is a lot of not interesting code that just updates entities.
@@ -109,19 +103,15 @@ The way this module works is we have an output array, which is responsible for e
 However we do use the helper functions in a weird way here. [[*Macro like functions][See macro like functions for reference.]]
 
 **** Helpers
-This function assumes the following are in scope:
-- `output`: A list of the entity changes to take
-- `map_events`: The output of the map_events module
-
 ***** create_pair_params
 #+begin_src streamline :tangle src/TraderJoe.strm
-fn create_pair_params(events) {
-    let fees_set = events?.fee_param_set ?? [];
+fn graph_create_pair_params(events) {
+    let fees_set = events.lb_factory?.fe_param_set ?? [];
 
     for fee in fees_set {
         let id = fee.lb_pair;
-        output.push(
-            new LbPairParameterSet id {
+        this.push(
+            update LbPairParameterSet id {
                 sender: fee.sender as Address!
                 binStep: fee.bin_step as BigInt!
                 baseFactor: fee.base_factor as BigInt!
@@ -137,28 +127,34 @@ fn create_pair_params(events) {
 }
 #+end_src
 
-***** set_pair_count
-- `output`: A list of the entity changes to take
+***** Update Pair Count
 #+begin_src streamline :tangle src/TraderJoe.strm
-fn set_pair_count(count) {
+fn graph_update_pair_count(store) {
     let id = global::FACTORY_ADDRESS;
-    output.push(
-        update LbFactory id {
-            pairCount: count as BigInt!
-        }
-    );
+    let count = store.deltas.len();
+
+    if count > 0 {
+        let pair_count = store.deltas[count - 1].new_value;
+
+        this.push(
+            update LbFactory id {
+                pairCount: count.to_string() as BigInt!
+            }
+        );
+    }
 }
 #+end_src
+
 ***** set_ignored_pairs
-- `output`: A list of the entity changes to take
 #+begin_src streamline :tangle src/TraderJoe.strm
-fn set_ignored_pairs(pairs) {
+fn graph_set_ignored_pairs(pairs) {
+    let pairs = pairs.deltas ?? [];
     for pair in pairs {
-        let id = pair.id;
-        let value = pair.value;
-        output.push(
+        let id = pair.key;
+        let value = pair.newValue;
+        this.push(
                 update LbPair id {
-                    ignored: value as Bool!
+                    ignored: value as Boolean!
                 }
         );
     }
@@ -166,27 +162,23 @@ fn set_ignored_pairs(pairs) {
 #+end_src
 
 
-**** Module Code
+**** graph_out
 The module required to sink to a subgraph.
 Emits a list of entity changes to take in the database.
 
 #+begin_src streamline :tangle src/TraderJoe.strm
-mfn graph_out(map_events,pair_count:get,ignored_pairs:deltas) {
+mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas) {
     let output = [];
 
-    let count = pair_count.get("pair_count");
-    set_pair_count!(count);
+    output.graph_update_pair_count(pair_count);
+    output.graph_create_pair_params(map_events);
+    output.graph_set_ignored_pairs(ignored_pairs);
 
-    create_pair_params!(map_events?.lb_factory);
-
-    let pair_changes = ignored_pairs.deltas.map(|e| #{ ignored: e.newValue, id: e.key });
-    set_ignored_pairs(pair_changes);
-
-    return output;
+    output
 }
 #+end_src
 
-** Helpers
+** Helpers :Code:
 *** get_avax_price_usd
 #+begin_src streamline :tangle src/TraderJoe.strm
 fn get_avax_price_usd(token) {
@@ -204,11 +196,12 @@ fn get_avax_price_usd(token) {
 Makes the RPC calls 🤢 to get the token data. Slow! But at least it's only once.
 
 #+begin_src streamline :tangle src/TraderJoe.strm
-fn get_token_meta(token) {
+fn get_token_meta() {
+    let token = this;
     let symbol = erc20::symbol(token) ?? "";
     let name = erc20::name(token) ?? "";
-    let decimals = erc20::decimals(token) ?? 0;
-    let totalSupply = erc20::totalSupply(token) ?? 0;
+    let decimals = erc20::decimals(token).to_string() ?? "";
+    let totalSupply = erc20::totalSupply(token).to_string() ?? "";
 
     #{
         name: name,
@@ -219,7 +212,7 @@ fn get_token_meta(token) {
 }
 #+end_src
 
-* FAQ
+* FAQ :Reference:
 This area contains questions and answers for them.
 ** Why is BLOCK written like that?
 
@@ -305,7 +298,7 @@ This might seem kind of weird because it is very different. And you don't have t
 
 [[*Where are the config files?][See: Where are the config files?]]
 
-** Macro like functions
+** TODO Macro like functions
 Most of the time, streamline functions are pure. Meaning they have no side effects. But we can modify how functions operate by calling them with a bang at the end. We visually show this with the ! syntax.
 
 What this does is calls the function, with the scope of the caller.
