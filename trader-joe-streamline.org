@@ -160,6 +160,24 @@ fn graph_set_ignored_pairs(pairs) {
     }
 }
 #+end_src
+***** create_tokens
+#+begin_src streamline :tangle src/TraderJoe.strm
+fn graph_create_tokens(token_meta_deltas) {
+    let tokens = token_meta_deltas.deltas;
+    for delta in tokens {
+        let id = delta.key;
+        let meta = delta.new_value;
+        this.push(
+            new Token id {
+                name: meta.name as String
+                symbol: meta.symbol as String
+                decimals: meta.decimals as String
+                totalSupply: meta.totalSupply as String
+            }
+        );
+    }
+}
+#+end_src
 
 
 **** graph_out
@@ -173,6 +191,7 @@ mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:de
     output.graph_update_pair_count(pair_count);
     output.graph_create_pair_params(map_events);
     output.graph_set_ignored_pairs(ignored_pairs);
+    output.graph_create_tokens(token_meta);
 
     output
 }

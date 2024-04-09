@@ -4,10 +4,10 @@ const WAVAX_ADDRESS = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
 mfn map_events(BLOCK) {
     let lb_factory_events = #{
-        pairs_created: lb_factory::LbPairCreated(BLOCK, []),
-        flash_loan_fee_set: lb_factory::FlashLoanFeeSet(BLOCK, []),
-        fee_param_set: lb_factory::FeeParametersSet(BLOCK, []),
-        ignored_pair_changes: lb_factory::LbPairIgnoredStateChanged(BLOCK, []),
+        pairs_created: lb_factory::LbPairCreated(BLOCK, [global::FACTORY_ADDRESS]),
+        flash_loan_fee_set: lb_factory::FlashLoanFeeSet(BLOCK, [global::FACTORY_ADDRESS]),
+        fee_param_set: lb_factory::FeeParametersSet(BLOCK, [global::FACTORY_ADDRESS]),
+        ignored_pair_changes: lb_factory::LbPairIgnoredStateChanged(BLOCK, [global::FACTORY_ADDRESS]),
     };
 
     let lb_pair_events = #{
@@ -20,7 +20,7 @@ mfn map_events(BLOCK) {
     }
 }
 
-sfn pair_count(map_events,s:add) {
+sfn pair_count(map_events, s:add) {
     let pairs_created = map_events?.lb_factory?.pairs_created ?? [];
 
     for pair in pairs_created {
@@ -28,7 +28,7 @@ sfn pair_count(map_events,s:add) {
     }
 }
 
-sfn ignored_pairs(map_events,s:set) {
+sfn ignored_pairs(map_events, s:set) {
     let pair_changes = map_events?.lb_factory?.ignored_pair_changes ?? [];
 
     for pair in pair_changes {
@@ -46,15 +46,12 @@ sfn avax_price(map_events,s:set) {
     // todo!
 }
 
-sfn token_meta(map_events,s:setOnce) {
+sfn token_meta(map_events, s:setOnce) {
     let swaps = map_events?.lb_pair?.swaps ?? [];
 
     for swap in swaps {
-        let token = swap.tx.address;
-        let meta = get_token_meta(token);
-        if type_of(meta) != "()" {
-            s.set(token, meta);
-        }
+        let token = swap.tx_meta.address;
+        s.set(token, token.get_token_meta());
     }
 }
 
@@ -63,20 +60,17 @@ sfn token_numeric_data(map_events,s:setOnce) {
 
     for swap in swaps {
         let token = swap.tx.address;
-        let meta = get_token_meta(token);
-        if type_of(meta) != "()" {
-            s.set(token, meta);
-        }
+        // todo!
     }
 }
 
-fn create_pair_params(events) {
-    let fees_set = events?.fee_param_set ?? [];
+fn graph_create_pair_params(events) {
+    let fees_set = events.lb_factory?.fe_param_set ?? [];
 
     for fee in fees_set {
         let id = fee.lb_pair;
-        output.push(
-            new LbPairParameterSet id {
+        this.push(
+            update LbPairParameterSet id {
                 sender: fee.sender as Address!
                 binStep: fee.bin_step as BigInt!
                 baseFactor: fee.base_factor as BigInt!
@@ -91,39 +85,59 @@ fn create_pair_params(events) {
     }
 }
 
-fn set_pair_count(count) {
+fn graph_update_pair_count(store) {
     let id = global::FACTORY_ADDRESS;
-    output.push(
-        update LbFactory id {
-            pairCount: count as BigInt!
-        }
-    );
+    let count = store.deltas.len();
+
+    if count > 0 {
+        let pair_count = store.deltas[count - 1].new_value;
+
+        this.push(
+            update LbFactory id {
+                pairCount: count.to_string() as BigInt!
+            }
+        );
+    }
 }
 
-fn set_ignored_pairs(pairs) {
+fn graph_set_ignored_pairs(pairs) {
+    let pairs = pairs.deltas ?? [];
     for pair in pairs {
-        let id = pair.id;
-        let value = pair.value;
-        output.push(
+        let id = pair.key;
+        let value = pair.newValue;
+        this.push(
                 update LbPair id {
-                    ignored: value as Bool!
+                    ignored: value as Boolean!
                 }
         );
     }
 }
 
-mfn graph_out(map_events,pair_count:get,ignored_pairs:deltas) {
+fn graph_create_tokens(token_meta_deltas) {
+    let tokens = token_meta_deltas.deltas;
+    for delta in tokens {
+        let id = delta.key;
+        let meta = delta.new_value;
+        this.push(
+            new Token id {
+                name: meta.name as String
+                symbol: meta.symbol as String
+                decimals: meta.decimals as String
+                totalSupply: meta.totalSupply as String
+            }
+        );
+    }
+}
+
+mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas) {
     let output = [];
 
-    let count = pair_count.get("pair_count");
-    set_pair_count!(count);
+    output.graph_update_pair_count(pair_count);
+    output.graph_create_pair_params(map_events);
+    output.graph_set_ignored_pairs(ignored_pairs);
+    output.graph_create_tokens(token_meta);
 
-    create_pair_params!(map_events?.lb_factory);
-
-    let pair_changes = ignored_pairs.deltas.map(|e| #{ ignored: e.newValue, id: e.key });
-    set_ignored_pairs(pair_changes);
-
-    return output;
+    output
 }
 
 fn get_avax_price_usd(token) {
@@ -137,11 +151,12 @@ fn get_avax_price_usd(token) {
     }
 }
 
-fn get_token_meta(token) {
+fn get_token_meta() {
+    let token = this;
     let symbol = erc20::symbol(token) ?? "";
     let name = erc20::name(token) ?? "";
-    let decimals = erc20::decimals(token) ?? 0;
-    let totalSupply = erc20::totalSupply(token) ?? 0;
+    let decimals = erc20::decimals(token).to_string() ?? "";
+    let totalSupply = erc20::totalSupply(token).to_string() ?? "";
 
     #{
         name: name,
