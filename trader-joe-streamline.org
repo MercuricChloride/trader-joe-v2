@@ -72,24 +72,24 @@ sfn avax_price(map_events,s:set) {
 }
 #+end_src
 ** Store Avax Volume
-#+begin_src streamline : tangle src/TraderJoe.strm
-sfn avax_volume(map_events, s:add) {
+#+begin_src streamline :tangle src/TraderJoe.strm
+sfn avax_volume(map_events,s:add) {
     let pairs = map_events?.lb_factory?.pairs_created ?? [];
+
     for pair in pairs {
-        if pair.tokenX = AVAX {
+        if pair.tokenX == AVAX {
             let amount_in = map_events?.lb_pair.swap.AmountInX;
             let amount_out = map_events?.lb_pair.swap.AmountOutX;
             s.add("AVAX_VOLUME", amount_in);
-            s.add "AVAX_VOLUME", amount_out);
+            s.add("AVAX_VOLUME", amount_out);
         }
-        if pair.tokenY = AVAX {
+        if pair.tokenY == AVAX {
             let amount_in = map_events?.lb_pair.swap.AmountInY;
             let amount_out = map_events?.lb_pair.swap.AmountOutY;
             s.add("AVAX_VOLUME", amount_in);
-            s.add "AVAX_VOLUME", amount_out);
+            s.add("AVAX_VOLUME", amount_out);
         }
     }
-
 }
 #+end_src
 
@@ -162,6 +162,7 @@ fn graph_update_pair_count(store) {
         this.push(
             update LbFactory id {
                 pairCount: count.to_string() as BigInt!
+                something: foo as LbPair:Ref
             }
         );
     }
@@ -204,25 +205,31 @@ fn graph_create_tokens(token_meta_deltas) {
 ** update_avax_volume
 #+begin_src  streamline :tangle src/TraderJoe.strm
 fn graph_update_avax_volume(avax_volume) {
-    let volume = avax_volume.get_at("AVAX_VOLUME");
-    update LbFactory id {
-        volumeAVAX: volume as BigInt!
-    }
+    let id = global::FACTORY_ADDRESS;
+    let volume = avax_volume.get("AVAX_VOLUME");
+    this.push(
+        update LbFactory id {
+                volumeAVAX: volume as BigInt!
+        }
+    );
 }
 #+end_src
 
 ** update_usd_volume
 #+begin_src  streamline :tangle src/TraderJoe.strm
 fn graph_update_usd_volume(avax_volume) {
+    let id = global::FACTORY_ADDRESS;
     let volume = avax_volume.get_at("AVAX_VOLUME");
     let avax_price_usd = get_avax_price_usd(WAVAX_ADDRESS);
     let usd_volume = volume * avax_price_usd;
-    update lbFactory id {
-        volumeUSD = usd_volume as BigInt!
-    }
+    this.push(
+        update LbFactory id {
+                volumeUSD: usd_volume as BigInt!
+        }
+    );
 }
-
 #+end_src
+
 **** graph_out
 The module required to sink to a subgraph.
 Emits a list of entity changes to take in the database.
@@ -246,14 +253,7 @@ mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:de
 *** get_avax_price_usd
 #+begin_src streamline :tangle src/TraderJoe.strm
 fn get_avax_price_usd(token) {
-    let price = dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0;
-
-    if type_of(price) == "BigInt" {
-        // parse_units works like in Ethers.js
-        return parse_units(price, 18);
-    } else {
-        return price;
-    }
+    dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0
 }
 #+end_src
 *** get_token_meta
