@@ -10,6 +10,7 @@ All constants can be accessed in function bodies by reading from the `global` mo
 const FACTORY_ADDRESS = 0x1886D09C9Ade0c5DB822D85D21678Db67B6c2982;
 const DEX_LENS_ADDRESS = 0x0A5077D8dc51e27Ad536847b0CF558165BA9AD1b;
 const WAVAX_ADDRESS = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+
 #+end_src
 
 ** Map Modules :Code:
@@ -70,6 +71,28 @@ sfn avax_price(map_events,s:set) {
     // todo!
 }
 #+end_src
+** Store Avax Volume
+#+begin_src streamline : tangle src/TraderJoe.strm
+sfn avax_volume(map_events, s:add) {
+    let pairs = map_events?.lb_factory?.pairs_created ?? [];
+    for pair in pairs {
+        if pair.tokenX = AVAX {
+            let amount_in = map_events?.lb_pair.swap.AmountInX;
+            let amount_out = map_events?.lb_pair.swap.AmountOutX;
+            s.add("AVAX_VOLUME", amount_in);
+            s.add "AVAX_VOLUME", amount_out);
+        }
+        if pair.tokenY = AVAX {
+            let amount_in = map_events?.lb_pair.swap.AmountInY;
+            let amount_out = map_events?.lb_pair.swap.AmountOutY;
+            s.add("AVAX_VOLUME", amount_in);
+            s.add "AVAX_VOLUME", amount_out);
+        }
+    }
+
+}
+#+end_src
+
 *** Token Stores
 There are a number of token fields we need to index, but we don't want to put them into a single store bc it will blow up.
 **** Store Meta
@@ -178,20 +201,42 @@ fn graph_create_tokens(token_meta_deltas) {
     }
 }
 #+end_src
+** update_avax_volume
+#+begin_src  streamline :tangle src/TraderJoe.strm
+fn graph_update_avax_volume(avax_volume) {
+    let volume = avax_volume.get_at("AVAX_VOLUME");
+    update LbFactory id {
+        volumeAVAX: volume as BigInt!
+    }
+}
+#+end_src
 
+** update_usd_volume
+#+begin_src  streamline :tangle src/TraderJoe.strm
+fn graph_update_usd_volume(avax_volume) {
+    let volume = avax_volume.get_at("AVAX_VOLUME");
+    let avax_price_usd = get_avax_price_usd(WAVAX_ADDRESS);
+    let usd_volume = volume * avax_price_usd;
+    update lbFactory id {
+        volumeUSD = usd_volume as BigInt!
+    }
+}
 
+#+end_src
 **** graph_out
 The module required to sink to a subgraph.
 Emits a list of entity changes to take in the database.
 
 #+begin_src streamline :tangle src/TraderJoe.strm
-mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas) {
+mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get) {
     let output = [];
 
     output.graph_update_pair_count(pair_count);
     output.graph_create_pair_params(map_events);
     output.graph_set_ignored_pairs(ignored_pairs);
     output.graph_create_tokens(token_meta);
+    output.graph_update_avax_volume(avax_volume);
+    output.graph_update_usd_volume(avax_volume);
 
     output
 }
@@ -201,7 +246,7 @@ mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:de
 *** get_avax_price_usd
 #+begin_src streamline :tangle src/TraderJoe.strm
 fn get_avax_price_usd(token) {
-    let price = dex_lens::getTokenPriceNative(global::DEX_LENS,token) ?? 0;
+    let price = dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0;
 
     if type_of(price) == "BigInt" {
         // parse_units works like in Ethers.js

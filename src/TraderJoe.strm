@@ -141,7 +141,7 @@ mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:de
 }
 
 fn get_avax_price_usd(token) {
-    let price = dex_lens::getTokenPriceNative(global::DEX_LENS,token) ?? 0;
+    let price = dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0;
 
     if type_of(price) == "BigInt" {
         // parse_units works like in Ethers.js
