@@ -61,15 +61,15 @@ mfn lb_pairs(map_events) {
         let base_fee_percentage = "todo()";
 
         output.push(
-        #{
-            pair_address: pair_address,
-            token_x: pair.token_x,
-            token_y: pair.token_y,
-            bin_step: pair.bin_step,
-            base_fee: base_fee_gwei,
-            base_fee_percentage: base_fee_percentage
-        } + result
-        )
+            #{
+                pair_address: pair_address,
+                token_x: pair.token_x,
+                token_y: pair.token_y,
+                bin_step: pair.bin_step,
+                base_fee: base_fee_gwei,
+                base_fee_percentage: base_fee_percentage
+            } + result
+        );
     }
 
     output
@@ -77,10 +77,12 @@ mfn lb_pairs(map_events) {
 
 sfn lb_pair_data(lb_pairs, s:setOnce) {
     for data in lb_pairs {
-        s.set(data.pair_address, #{
-            token_x: data.token_x,
-            token_y: data.token_y,
-        });
+        s.set(data.pair_address,
+              #{
+                token_x: data.token_x,
+                token_y: data.token_y,
+            }
+             );
     }
 }
 
@@ -101,6 +103,7 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
     for swap in swaps {
         let lb_token = swap.tx_meta.address;
         let pair_data = lb_pair_data.get(lb_token);
+        let for_y = swap.swap_for_y;
 
         if pair_data.type_of() == "()" {
             pair_data = debug_token_data(lb_token);
@@ -110,36 +113,74 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
 
         let token_in;
         let token_out;
-        if swap.swap_for_y {
-            token_in = pair_data?.token_x;
-            token_out = pair_data?.token_y;
+
+        if for_y {
+            token_in = pair_data.token_x;
+            token_out = pair_data.token_y;
         } else {
-            token_in = pair_data?.token_y;
-            token_out = pair_data?.token_x;
+            token_in = pair_data.token_y;
+            token_out = pair_data.token_x;
         }
 
-        let decimals = token_in.get_token_meta().decimals.parse_int();
-        let fees = swap.fees.parse_units(decimals);
+        let meta = #{
+            input: token_in.get_token_meta(),
+            out: token_out.get_token_meta(),
+        };
+
+        let input_decimals = meta.input.decimals.parse_int();
+
+        let amountIn = swap.amount_in;//.parse_units(input_decimals);
+        let amountOut = swap.amount_out;//.parse_units(meta.out.decimals.parse_int());
+        let fees = swap.fees.parse_units(input_decimals);
+
+        let amount_x;
+        let amount_y;
+
+        if for_y {
+            amount_x = amountIn;
+            amount_y = `${amountOut}`;
+        } else {
+            amount_x = `${amountIn}`;
+            amount_y = amountOut;
+        }
 
         output.push(
             #{
-                lb_pair: swap.tx_meta.address,
+                pair: swap.tx_meta.address,
                 fees: fees,
-                decimals: decimals
+                token_in: token_in,
+                token_out: token_out,
+                token_x: swap.token_x,
+                token_y: swap.token_y,
+                amount_x: amount_x,
+                amount_y: amount_y,
             }
         );
-
-        print("Pair data not found! for: " + swap.tx_meta.address);
     }
 
     if output.len() > 0 {
-        output
+        return output;
     }
 }
 
-sfn pair_tx_count(pair_swaps, s:add) {
-    for swap in pair_swaps {
+sfn reserves(pair_swaps, s:add) {
+    for swap in pair_swaps ?? [] {
+        let id = `${swap.pair}:x`;
+        s.add(id, swap.amount_x);
+        let id = `${swap.pair}:y`;
+        s.add(id, swap.amount_y);
+    }
+}
+
+mfn map_reserves(reserves:deltas) {
+    reserves.deltas
+}
+
+sfn tx_counts(pair_swaps, s:add) {
+    for swap in pair_swaps ?? [] {
         s.add(swap.pair, 1);
+        s.add(swap.token_in, 1);
+        s.add(swap.token_out, 1);
     }
 }
 
@@ -264,8 +305,8 @@ method graph_create_tokens(token_meta_deltas) {
             new Token id {
                 name: meta.name as String
                 symbol: meta.symbol as String
-                decimals: meta.decimals as String
-                totalSupply: meta.totalSupply as String
+                decimals: meta.decimals as BigInt
+                totalSupply: meta.totalSupply as BigInt
             }
         );
     }
@@ -327,7 +368,23 @@ method graph_create_lb_pairs(lb_pairs, block) {
     }
 }
 
-mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs) {
+method graph_update_tx_counts(tx_counts) {
+    let deltas = tx_counts.deltas;
+    for delta in deltas {
+        let id = delta.key;
+        let value = delta.new_value;
+        this.push(
+            update Token id {
+                txCount: value as BigInt!
+            }
+        );
+    }
+}
+
+method graph_update_pair_reserves(reserves) {
+}
+
+mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs, tx_counts:deltas, pair_swaps) {
     let output = [];
 
     output.graph_create_lb_pairs(lb_pairs, BLOCK);
@@ -335,6 +392,8 @@ mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
     output.graph_create_pair_params(map_events);
     output.graph_set_ignored_pairs(ignored_pairs);
     output.graph_create_tokens(token_meta);
+    output.graph_update_tx_counts(tx_counts);
+
     //output.graph_update_avax_volume(avax_volume);
     //output.graph_update_usd_volume(avax_volume);
 
