@@ -1,0 +1,20 @@
+type LbPairParameterSet @entity {
+  id:ID!
+  sender: Bytes!
+  binStep: BigInt!
+  baseFactor: BigInt!
+  filterPeriod: BigInt!
+  decayPeriod: BigInt!
+  reductionFactor: BigInt!
+  variableFeeControl: BigInt!
+  protocolShare: BigInt!
+  maxVolatilityAccumulated: BigInt!
+}
+type LbFactory @entity {
+  id:ID!
+  Paircount: BigInt!
+}
+type LbPair @entity {
+  id:ID!
+  ignored: Boolean!
+}

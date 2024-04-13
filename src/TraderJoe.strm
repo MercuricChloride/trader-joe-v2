@@ -163,7 +163,6 @@ method graph_update_pair_count(store) {
         this.push(
             update LbFactory id {
                 pairCount: count.to_string() as BigInt!
-                something: foo as LbPair:Ref
             }
         );
     }
@@ -210,8 +209,8 @@ method graph_update_avax_volume(avax_volume) {
 
 method graph_update_usd_volume(avax_volume) {
     let id = global::FACTORY_ADDRESS;
-    let volume = avax_volume.get_at("AVAX_VOLUME");
-    let avax_price_usd = get_avax_price_usd(WAVAX_ADDRESS);
+    let volume = avax_volume.get("AVAX_VOLUME");
+    let avax_price_usd = get_avax_price_usd(global::WAVAX_ADDRESS);
     let usd_volume = volume * avax_price_usd;
     this.push(
         update LbFactory id {
@@ -258,18 +257,18 @@ mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
     let output = [];
 
     output.graph_create_lb_pairs(lb_pairs, BLOCK);
-    //output.graph_update_pair_count(pair_count);
-    //output.graph_create_pair_params(map_events);
-    //output.graph_set_ignored_pairs(ignored_pairs);
-    //output.graph_create_tokens(token_meta);
-    //output.graph_update_avax_volume(avax_volume);
-    //output.graph_update_usd_volume(avax_volume);
+    output.graph_update_pair_count(pair_count);
+    output.graph_create_pair_params(map_events);
+    output.graph_set_ignored_pairs(ignored_pairs);
+    output.graph_create_tokens(token_meta);
+    output.graph_update_avax_volume(avax_volume);
+    output.graph_update_usd_volume(avax_volume);
 
     output
 }
 
 fn get_avax_price_usd(token) {
-    dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0
+    dex_lens::getTokenPriceNative(token , global::DEX_LENS_ADDRESS) ?? 0
 }
 
 method get_token_meta() {
