@@ -1,0 +1,48 @@
+type Token @entity {
+name: String
+totalSupply: String
+symbol: String
+decimals: String
+}
+type LbPair @entity {
+tokenXPrice: BigInt!
+feesUSD: BigInt!
+feesTokenX: BigInt!
+untrackedVolumeUSD: BigInt!
+tokenYPriceUSD: BigInt!
+block: BigInt!
+feesTokenY: BigInt!
+volumeTokenX: BigInt!
+tokenXPriceUSD: BigInt!
+tokenYPrice: BigInt!
+activeId: String!
+volumeTokenY: BigInt!
+timestamp: String!
+binStep: String!
+liquidityProviderCount: BigInt!
+txCount: BigInt!
+totalValueLockedAvax: BigInt!
+reserveX: BigInt!
+tokenX: Token!
+reserveY: BigInt!
+tokenY: Token!
+totalValueLockedUSD: BigInt!
+ignored: Boolean!
+}
+type LbFactory @entity {
+pairCount: BigInt!
+volumeUSD: BigInt!
+something: LbPair!
+volumeAVAX: BigInt!
+}
+type LbPairParameterSet @entity {
+reductionFactor: BigInt!
+protocolShare: BigInt!
+binStep: BigInt!
+variableFeeControl: BigInt!
+baseFactor: BigInt!
+maxVolatilityAccumulated: BigInt!
+decayPeriod: BigInt!
+sender: Address!
+filterPeriod: BigInt!
+}

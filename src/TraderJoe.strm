@@ -20,6 +20,55 @@ mfn map_events(BLOCK) {
     }
 }
 
+method append_zeros(length) {
+    let as_string = this.to_string();
+    let item_length = as_string.len();
+    let count = length - item_length;
+    let zeros = "";
+    for i in 0..count {
+        zeros += "0";
+    }
+    `${as_string}${zeros}`
+}
+
+
+method lb_pair_rpc_calls() {
+        let address = this;
+        let reserves = lb_pair::getReservesAndId(address);
+        let fee_params = lb_pair::feeParameters(address);
+        #{
+            bin_step: fee_params[0].to_string(),
+            base_factor: fee_params[1].to_string(),
+            active_id: reserves[2].to_string(),
+        }
+}
+
+mfn lb_pairs(map_events) {
+    let pairs_created = map_events?.lb_factory?.pairs_created ?? [];
+
+    let output = [];
+    for pair in pairs_created {
+        let pair_address = pair.lb_pair;
+        let result = pair_address.lb_pair_rpc_calls();
+        let base_fee_gwei = (uint(result.bin_step) * uint(result.base_factor)).append_zeros(18);
+        // TODO Add percentage
+        let base_fee_percentage = "todo()";
+
+        output.push(
+        #{
+            pair_address: pair_address,
+            token_x: pair.token_x,
+            token_y: pair.token_y,
+            bin_step: pair.bin_step,
+            base_fee: base_fee_gwei,
+            base_fee_percentage: base_fee_percentage
+        } + result
+        )
+    }
+
+    output
+}
+
 sfn pair_count(map_events, s:add) {
     let pairs_created = map_events?.lb_factory?.pairs_created ?? [];
 
@@ -46,6 +95,25 @@ sfn avax_price(map_events,s:set) {
     // todo!
 }
 
+sfn avax_volume(map_events,s:add) {
+    // let pairs = map_events?.lb_factory?.pairs_created ?? [];
+
+    // for pair in pairs {
+    //     if pair.tokenX == AVAX {
+    //         let amount_in = map_events?.lb_pair.swap.AmountInX;
+    //         let amount_out = map_events?.lb_pair.swap.AmountOutX;
+    //         s.add("AVAX_VOLUME", amount_in);
+    //         s.add("AVAX_VOLUME", amount_out);
+    //     }
+    //     if pair.tokenY == AVAX {
+    //         let amount_in = map_events?.lb_pair.swap.AmountInY;
+    //         let amount_out = map_events?.lb_pair.swap.AmountOutY;
+    //         s.add("AVAX_VOLUME", amount_in);
+    //         s.add("AVAX_VOLUME", amount_out);
+    //     }
+    // }
+}
+
 sfn token_meta(map_events, s:setOnce) {
     let swaps = map_events?.lb_pair?.swaps ?? [];
 
@@ -64,7 +132,7 @@ sfn token_numeric_data(map_events,s:setOnce) {
     }
 }
 
-fn graph_create_pair_params(events) {
+method graph_create_pair_params(events) {
     let fees_set = events.lb_factory?.fe_param_set ?? [];
 
     for fee in fees_set {
@@ -85,7 +153,7 @@ fn graph_create_pair_params(events) {
     }
 }
 
-fn graph_update_pair_count(store) {
+method graph_update_pair_count(store) {
     let id = global::FACTORY_ADDRESS;
     let count = store.deltas.len();
 
@@ -95,12 +163,13 @@ fn graph_update_pair_count(store) {
         this.push(
             update LbFactory id {
                 pairCount: count.to_string() as BigInt!
+                something: foo as LbPair:Ref
             }
         );
     }
 }
 
-fn graph_set_ignored_pairs(pairs) {
+method graph_set_ignored_pairs(pairs) {
     let pairs = pairs.deltas ?? [];
     for pair in pairs {
         let id = pair.key;
@@ -113,7 +182,7 @@ fn graph_set_ignored_pairs(pairs) {
     }
 }
 
-fn graph_create_tokens(token_meta_deltas) {
+method graph_create_tokens(token_meta_deltas) {
     let tokens = token_meta_deltas.deltas;
     for delta in tokens {
         let id = delta.key;
@@ -129,29 +198,81 @@ fn graph_create_tokens(token_meta_deltas) {
     }
 }
 
-mfn graph_out(map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas) {
+method graph_update_avax_volume(avax_volume) {
+    let id = global::FACTORY_ADDRESS;
+    let volume = avax_volume.get("AVAX_VOLUME");
+    this.push(
+        update LbFactory id {
+                volumeAVAX: volume as BigInt!
+        }
+    );
+}
+
+method graph_update_usd_volume(avax_volume) {
+    let id = global::FACTORY_ADDRESS;
+    let volume = avax_volume.get_at("AVAX_VOLUME");
+    let avax_price_usd = get_avax_price_usd(WAVAX_ADDRESS);
+    let usd_volume = volume * avax_price_usd;
+    this.push(
+        update LbFactory id {
+                volumeUSD: usd_volume as BigInt!
+        }
+    );
+}
+
+method graph_create_lb_pairs(lb_pairs, block) {
+    let pairs = lb_pairs ?? [];
+
+    for p in pairs {
+        let id = p.pair_address;
+        this.push(
+            new LbPair id {
+                tokenX: p.token_x as Token:Ref
+                tokenY: p.token_y as Token:Ref
+                binStep: p.bin_step as String!
+                activeId: p.active_id as String!
+                reserveX: 0 as BigInt!
+                reserveY: 0 as BigInt!
+                totalValueLockedAvax: 0 as BigInt!
+                totalValueLockedUSD: 0 as BigInt!
+                tokenXPrice: 0 as BigInt!
+                tokenYPrice: 0 as BigInt!
+                tokenXPriceUSD: 0 as BigInt!
+                tokenYPriceUSD: 0 as BigInt!
+                volumeTokenX: 0 as BigInt!
+                volumeTokenY: 0 as BigInt!
+                untrackedVolumeUSD: 0 as BigInt!
+                txCount: 0 as BigInt!
+                feesTokenX: 0 as BigInt!
+                feesTokenY: 0 as BigInt!
+                feesUSD: 0 as BigInt!
+                liquidityProviderCount: 0 as BigInt!
+                timestamp: block.timestamp as String!
+                block: block.number as BigInt!
+            }
+        );
+    }
+}
+
+mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs) {
     let output = [];
 
-    output.graph_update_pair_count(pair_count);
-    output.graph_create_pair_params(map_events);
-    output.graph_set_ignored_pairs(ignored_pairs);
-    output.graph_create_tokens(token_meta);
+    output.graph_create_lb_pairs(lb_pairs, BLOCK);
+    //output.graph_update_pair_count(pair_count);
+    //output.graph_create_pair_params(map_events);
+    //output.graph_set_ignored_pairs(ignored_pairs);
+    //output.graph_create_tokens(token_meta);
+    //output.graph_update_avax_volume(avax_volume);
+    //output.graph_update_usd_volume(avax_volume);
 
     output
 }
 
 fn get_avax_price_usd(token) {
-    let price = dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0;
-
-    if type_of(price) == "BigInt" {
-        // parse_units works like in Ethers.js
-        return parse_units(price, 18);
-    } else {
-        return price;
-    }
+    dex_lens::getTokenPriceNative(token , global::DEX_LENS,token) ?? 0
 }
 
-fn get_token_meta() {
+method get_token_meta() {
     let token = this;
     let symbol = erc20::symbol(token) ?? "";
     let name = erc20::name(token) ?? "";
