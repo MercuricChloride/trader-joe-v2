@@ -18,8 +18,8 @@ mfn map_events(BLOCK) {
         swaps: lb_pair::Swap(BLOCK, []),
         flash_loans: lb_pair::FlashLoan(BLOCK, []),
         composition_fee: lb_pair::CompositionFee(BLOCK, []),
-        liquidity_added: lb_pair::LiquidityAdded(BLOCK, []),
-        liquidity_removed: lb_pair::LiquidityRemoved(BLOCK, []),
+        liquidity_added: lb_pair::DepositedToBin(BLOCK, []),
+        liquidity_removed: lb_pair::WithdrawnFromBin(BLOCK, []),
         fees_collected: lb_pair::FeesCollected(BLOCK, []),
         protocol_fees_collected: lb_pair::ProtocolFeesCollected(BLOCK, []),
         transfer_single: lb_pair::TransferSingle(BLOCK, []),
@@ -71,8 +71,6 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
         if pair_data.type_of() == "()" {
             pair_data = lb_token.debug_token_data();
         }
-
-        debug(pair_data);
 
         let token_in;
         let token_out;
@@ -128,11 +126,11 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
     }
 }
 
-mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs, tx_counts:deltas, pair_swaps, pair_reserves:deltas, pair_volume:deltas, user_count:deltas, unique_users:deltas) {
+mfn graph_out(CLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs, tx_counts:deltas, pair_swaps, pair_reserves:deltas, pair_volume:deltas, user_count:deltas, unique_users:deltas, token_prices:deltas) {
     let output = [];
 
     // Create the lb pairs
-    output.graph_create_lb_pairs(lb_pairs, BLOCK);
+    output.graph_create_lb_pairs(lb_pairs, CLOCK);
 
     // Create the user entities
     output.graph_create_users(unique_users);
@@ -142,6 +140,7 @@ mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
 
     // Update the factory pair counts
     output.graph_update_pair_count(pair_count);
+
     output.graph_create_pair_params(map_events);
     // Add any ignored pairs
     output.graph_set_ignored_pairs(ignored_pairs);
@@ -158,6 +157,9 @@ mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
     // Update the pair volumes
     output.graph_update_pair_volume(pair_volume);
 
+    // Update the pair prices
+    output.graph_update_token_prices(token_prices);
+
     //output.graph_update_avax_volume(avax_volume);
     //output.graph_update_usd_volume(avax_volume);
 
@@ -168,11 +170,66 @@ mfn graph_out(BLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
 // Store Modules
 // -----------------------
 
-sfn tx_counts(pair_swaps, s:add) {
-    for swap in pair_swaps ?? [] {
-        s.add(swap.pair, 1);
-        s.add(swap.token_in, 1);
-        s.add(swap.token_out, 1);
+method store_tx_counts(getter, pair) {
+    let pair_data = getter.get(pair) ?? pair.debug_token_data();
+    this.add(`p:${pair}`, 1);
+    this.add(`f:${global::FACTORY_ADDRESS}`, 1);
+    if type_of(pair_data.token_x) != "()" {
+        this.add(`t:${pair_data.token_x}`, 1);
+    } else {
+        debug(`Pair: ${pair} found to not have a token_x, is it an LbPair?`);
+    }
+    if type_of(pair_data.token_y) != "()" {
+        this.add(`t:${pair_data.token_y}`, 1);
+    } else {
+        debug(`Pair: ${pair} found to not have a token_y, is it an LbPair?`);
+    }
+}
+
+method store_derived_prices(getter, pair) {
+    let pair_data = getter.get(pair) ?? pair.debug_token_data();
+    if type_of(pair_data.token_x) != "()" {
+        let x_price = get_price_native(pair_data.token_x).to_string();
+        this.set(pair_data.token_x, x_price);
+    } else {
+        debug(`Pair: ${pair} found to not have a token_x, is it an LbPair?`);
+    }
+    if type_of(pair_data.token_y) != "()" {
+        let y_price = get_price_native(pair_data.token_y).to_string();
+        this.set(pair_data.token_y, y_price);
+    } else {
+        debug(`Pair: ${pair} found to not have a token_y, is it an LbPair?`);
+    }
+}
+
+// Here we use a prefix to determine what kind of tx count we are setting, so we can update the right entities
+sfn tx_counts(map_events, lb_pair_data:get, s:add) {
+    // get all lb pair events
+    let pair_events = map_events.lb_pair.values().reduce(|acc| this + acc, []);
+    for event in pair_events {
+        s.store_tx_counts(lb_pair_data, event.tx_meta.address);
+    }
+}
+
+sfn token_prices(map_events, lb_pair_data:get, s:set) {
+    // get all lb pair events
+    let pair_events = map_events.lb_pair.values().reduce(|acc| this + acc, []);
+
+    let addresses = #{};
+    for event in pair_events {
+        let addr = event.tx_meta.address;
+        if addr in addresses {
+            continue;
+        } else {
+            s.store_derived_prices(lb_pair_data, addr);
+            addresses[addr] = true;
+        }
+    }
+}
+
+mfn debug_me(token_prices:deltas) {
+    if token_prices.deltas.len() > 0 {
+        return token_prices.deltas;
     }
 }
 
@@ -250,8 +307,7 @@ sfn lb_pair_data(lb_pairs, s:setOnce) {
               #{
                 token_x: data.token_x,
                 token_y: data.token_y,
-            }
-             );
+              });
     }
 }
 
@@ -353,14 +409,10 @@ method get_token_meta() {
         totalSupply: totalSupply
     }
 }
-method get_avax_price_usd() {
-    let token = this;
-    dex_lens::getTokenPriceNative(token , global::DEX_LENS_ADDRESS) ?? 0
-}
 method debug_token_data() {
     let token = this;
-    let token_x = lb_pair::tokenX(token);
-    let token_y = lb_pair::tokenY(token);
+    let token_x = lb_pair::tokenX(token) ?? "";
+    let token_y = lb_pair::tokenY(token) ?? "";
     #{
         token_x: address(token_x),
         token_y: address(token_y),
@@ -372,6 +424,17 @@ method get_last() {
         return this[length - 1];
     }
 }
+
+// -----------------------
+// General Helper Functions
+// -----------------------
+fn get_price_native(token) {
+    dex_lens::getTokenPriceNative(token , global::DEX_LENS_ADDRESS) ?? 0
+}
+fn get_price_usd(token) {
+    dex_lens::getTokenPriceUSD(token , global::DEX_LENS_ADDRESS) ?? 0
+}
+
 
 // -----------------------
 // SUBGRAPH ENTITY METHODS
@@ -414,7 +477,7 @@ method graph_create_tokens(token_meta_deltas) {
         );
     }
 }
-method graph_create_lb_pairs(lb_pairs, block) {
+method graph_create_lb_pairs(lb_pairs, clock) {
     let pairs = lb_pairs ?? [];
 
     for p in pairs {
@@ -446,8 +509,8 @@ method graph_create_lb_pairs(lb_pairs, block) {
                 feesTokenY: 0 as BigInt
                 feesUSD: 0 as BigInt
                 liquidityProviderCount: 0 as BigInt
-                timestamp: block.timestamp as String
-                block: block.number as BigInt
+                timestamp: clock.timestamp as String
+                block: clock.number as BigInt
             }
         );
     }
@@ -499,13 +562,46 @@ method graph_update_usd_volume(avax_volume) {
 method graph_update_tx_counts(tx_counts) {
     let deltas = tx_counts.deltas;
     for delta in deltas {
-        let id = delta.key;
+        let kind = delta.key.sub_string(0,2);
+        let id = delta.key.sub_string(2);
+        debug(`ID: \n ${id}`);
         let value = delta.new_value;
-        this.push(
-            update Token id {
-                txCount: value as BigInt
+        // updating a pair
+        let change = switch kind {
+            "p:" => {
+                update LbPair id {
+                    txCount: value as BigInt
+                }
             }
-        );
+            "t:" => {
+                update Token id {
+                    txCount: value as BigInt
+                }
+            }
+            "f:" => {
+                update Factory id {
+                    txCount: value as BigInt
+                }
+            }
+        };
+
+        this.push(change);
+    }
+}
+method graph_update_token_prices(token_prices) {
+    let deltas = token_prices.deltas;
+    for delta in deltas {
+        let id = delta.key;
+        let old_value = delta.old_value;
+        let value = delta.new_value;
+
+        if old_value != value {
+            this.push(
+                update Token id {
+                    derivedAvax: value as BigInt
+                }
+            );
+        }
     }
 }
 method graph_update_user_count(user_count) {
@@ -582,29 +678,5 @@ method graph_set_ignored_pairs(pairs) {
                     ignored: value as Boolean
                 }
         );
-    }
-}
-
-
-// -----------------------
-// PURGATORY
-// -----------------------
-mfn pair_events(map_events, pair_addresses:get) {
-    let swaps = map_events?.lb_pair.swaps ?? [];
-
-    let foo = [];
-    for swap in swaps {
-        let result = pair_addresses.get(swap.tx_meta.address);
-
-        debug(result);
-        if type_of(result) != "()" {
-            foo.push(swap);
-        }
-    }
-
-    if foo.len() > 0 {
-        #{
-            swaps: foo,
-        }
     }
 }
