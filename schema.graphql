@@ -1,48 +1,61 @@
 type Token @entity {
-name: String
-totalSupply: String
-symbol: String
-decimals: String
+  id: ID!
+  name: String
+  txCount: BigInt
+  totalSupply: BigInt
+  symbol: String
+  factory: LbFactory
+  decimals: BigInt
+}
+type User @entity {
+  id: ID!
 }
 type LbPair @entity {
-tokenXPrice: BigInt!
-feesUSD: BigInt!
-feesTokenX: BigInt!
-untrackedVolumeUSD: BigInt!
-tokenYPriceUSD: BigInt!
-block: BigInt!
-feesTokenY: BigInt!
-volumeTokenX: BigInt!
-tokenXPriceUSD: BigInt!
-tokenYPrice: BigInt!
-activeId: String!
-volumeTokenY: BigInt!
-timestamp: String!
-binStep: String!
-liquidityProviderCount: BigInt!
-txCount: BigInt!
-totalValueLockedAvax: BigInt!
-reserveX: BigInt!
-tokenX: Token!
-reserveY: BigInt!
-tokenY: Token!
-totalValueLockedUSD: BigInt!
-ignored: Boolean!
+  id: ID!
+  tokenXPrice: BigInt
+  volumeX: BigInt
+  feesUSD: BigInt
+  feesTokenX: BigInt
+  untrackedVolumeUSD: BigInt
+  tokenYPriceUSD: BigInt
+  volumeY: BigInt
+  block: BigInt
+  feesTokenY: BigInt
+  volumeTokenX: BigInt
+  tokenXPriceUSD: BigInt
+  tokenYPrice: BigInt
+  activeId: String
+  volumeTokenY: BigInt
+  timestamp: String
+  binStep: String
+  liquidityProviderCount: BigInt
+  txCount: BigInt
+  totalValueLockedAvax: BigInt
+  reserveX: BigInt
+  tokenX: Token
+  reserveY: BigInt
+  tokenY: Token
+  tokenYAddress: String
+  tokenXAddress: String
+  totalValueLockedUSD: BigInt
+  ignored: Boolean
 }
 type LbFactory @entity {
-pairCount: BigInt!
-volumeUSD: BigInt!
-something: LbPair!
-volumeAVAX: BigInt!
+  id: ID!
+  pairCount: BigInt
+  userCount: BigInt
+  volumeUSD: BigInt
+  volumeAVAX: BigInt
 }
 type LbPairParameterSet @entity {
-reductionFactor: BigInt!
-protocolShare: BigInt!
-binStep: BigInt!
-variableFeeControl: BigInt!
-baseFactor: BigInt!
-maxVolatilityAccumulated: BigInt!
-decayPeriod: BigInt!
-sender: Address!
-filterPeriod: BigInt!
+  id: ID!
+  reductionFactor: BigInt!
+  protocolShare: BigInt!
+  binStep: BigInt!
+  variableFeeControl: BigInt!
+  baseFactor: BigInt!
+  maxVolatilityAccumulated: BigInt!
+  decayPeriod: BigInt!
+  sender: String!
+  filterPeriod: BigInt!
 }
