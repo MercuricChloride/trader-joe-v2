@@ -107,6 +107,7 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
 
         output.push(
             #{
+                bin_id: swap.id,
                 pair: swap.tx_meta.address,
                 fees: fees,
                 token_in: token_in,
@@ -116,6 +117,8 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
                 from: swap.tx_meta.from,
                 amount_x: amount_x,
                 amount_y: amount_y,
+                minted: 0,
+                burned: 0,
                 for_y: for_y,
             }
         );
@@ -126,7 +129,29 @@ mfn pair_swaps(map_events, lb_pair_data:get, token_meta:get) {
     }
 }
 
-mfn graph_out(CLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs, tx_counts:deltas, pair_swaps, pair_reserves:deltas, pair_volume:deltas, user_count:deltas, unique_users:deltas, token_prices:deltas) {
+mfn bin_changes(map_events, token_prices:get, pair_reserves:get, lb_pair_data:get) {
+    let output = [];
+    let changes = [];
+
+    for change in changes {
+        let pair = change.pair;
+        let pair_data = lb_pair_data.get(pair);
+        output.push(
+            #{
+                pair: pair,
+                bin_id: change.id,
+                reserve_x: pair_reserves.get(`${pair}:x`),
+                reserve_y: pair_reserves.get(`${pair}:y`),
+                price_x: token_prices.get(`${pair_data.token_x}`),
+                price_y: token_prices.get(`${pair_data.token_y}`),
+            }
+        );
+    }
+
+    output
+}
+
+mfn graph_out(CLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_meta:deltas, avax_volume:get, lb_pairs, tx_counts:deltas, pair_swaps, pair_reserves:deltas, pair_volume:deltas, user_count:deltas, unique_users:deltas, token_prices:deltas, bin_total_supply:deltas, bin_reserves:deltas) {
     let output = [];
 
     // Create the lb pairs
@@ -160,8 +185,8 @@ mfn graph_out(CLOCK, map_events, pair_count:deltas, ignored_pairs:deltas, token_
     // Update the pair prices
     output.graph_update_token_prices(token_prices);
 
-    //output.graph_update_avax_volume(avax_volume);
-    //output.graph_update_usd_volume(avax_volume);
+    // Update the bin data
+    output.graph_update_bin_data(bin_reserves, bin_total_supply);
 
     output
 }
@@ -186,17 +211,32 @@ method store_tx_counts(getter, pair) {
     }
 }
 
+// note that we use the x and y key to store the pair address, and if the token was x or y
 method store_derived_prices(getter, pair) {
     let pair_data = getter.get(pair) ?? pair.debug_token_data();
+    let avax_price_usd = get_avax_price_usd();
+
     if type_of(pair_data.token_x) != "()" {
-        let x_price = get_price_native(pair_data.token_x).to_string();
-        this.set(pair_data.token_x, x_price);
+        let native_price = get_price_native(pair_data.token_x);
+        let usd_price = uint(native_price) * avax_price_usd;
+        let prices = #{
+            native: native_price.to_string(),
+            usd_price: usd_price.to_string(),
+            x: pair,
+        };
+        this.set(pair_data.token_x, prices);
     } else {
         debug(`Pair: ${pair} found to not have a token_x, is it an LbPair?`);
     }
     if type_of(pair_data.token_y) != "()" {
-        let y_price = get_price_native(pair_data.token_y).to_string();
-        this.set(pair_data.token_y, y_price);
+        let native_price = get_price_native(pair_data.token_y);
+        let usd_price = uint(native_price) * avax_price_usd;
+        let prices = #{
+            native: native_price.to_string(),
+            usd_price: usd_price.to_string(),
+            y: pair,
+        };
+        this.set(pair_data.token_y, prices);
     } else {
         debug(`Pair: ${pair} found to not have a token_y, is it an LbPair?`);
     }
@@ -227,17 +267,29 @@ sfn token_prices(map_events, lb_pair_data:get, s:set) {
     }
 }
 
-mfn debug_me(token_prices:deltas) {
-    if token_prices.deltas.len() > 0 {
-        return token_prices.deltas;
-    }
-}
-
 sfn pair_count(map_events, s:add) {
     let pairs_created = map_events?.lb_factory?.pairs_created ?? [];
 
     for pair in pairs_created {
         s.add("pair_count", 1);
+    }
+}
+
+sfn bin_reserves(pair_swaps, s:add) {
+    for swap in pair_swaps ?? [] {
+        let bin = `${swap.pair}#${swap.bin_id}`;
+        s.add(`${bin}:x`, swap.amount_x);
+        s.add(`${bin}:y`, swap.amount_y);
+    }
+}
+
+sfn bin_total_supply(pair_swaps, s:add) {
+    for swap in pair_swaps ?? [] {
+        let bin = `${swap.pair}#${swap.bin_id}`;
+        if swap.minted != swap.burned {
+            let change = swap.minted - swap.burned;
+            s.add(bin, uint(change));
+        }
     }
 }
 
@@ -434,6 +486,10 @@ fn get_price_native(token) {
 fn get_price_usd(token) {
     dex_lens::getTokenPriceUSD(token , global::DEX_LENS_ADDRESS) ?? 0
 }
+fn get_avax_price_usd() {
+    let token = global::WAVAX_ADDRESS;
+    get_price_usd(token)
+}
 
 
 // -----------------------
@@ -459,6 +515,176 @@ method graph_create_pair_params(events) {
             }
         );
     }
+}
+method graph_create_events(events, timestamp) {
+    let list = events.lb_pair.liquidity_added;
+    for i in 0..list.len() {
+        let event = list[i];
+        this.graph_create_mint(event, i, timestamp);
+    }
+}
+method graph_create_mint(event, index, timestamp) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    this.push(
+        new Mint id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+            amountX: event.amount_x as BigInt
+            amountY: event.amount_x as BigInt
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
+}
+method graph_create_burn(event, index, timestamp) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    this.push(
+        new Burn id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+            amountX: event.amount_x as BigInt
+            amountY: event.amount_x as BigInt
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
+}
+method graph_create_swap(event, index, timestamp) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    let x_in = 0;
+    let x_out = 0;
+    let y_in = 0;
+    let y_out = 0;
+    let fees_x = 0;
+    let fees_y = 0;
+    if event.swap_for_y {
+        x_in = event.amountIn;
+        y_out = event.amountOut;
+        fees_x = event.fees;
+    } else {
+        x_out = event.amountOut;
+        y_in = event.amountIn;
+        fees_y = event.fees;
+    }
+    this.push(
+        new Swap id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+            activeId: event.id as BigInt
+
+            amountXIn: x_in as BigInt
+            amountXOut: x_out as BigInt
+            amountYIn: y_in as BigInt
+            amountYOut: y_out as BigInt
+
+            feesX: fees_x as BigInt
+            feesY: fees_y as BigInt
+
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
+}
+method graph_create_flash(event, index, timestamp) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    this.push(
+        new FlashLoan id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+
+            token: event.token as Token:Ref
+
+            amount: event.amount as BigInt
+
+            fees: fees as BigInt
+
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
+}
+method graph_create_collect(event, index, timestamp) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    this.push(
+        new Collect id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+
+            amountX: event.amount_x as BigInt
+            amountY: event.amount_y as BigInt
+
+            fees: fees as BigInt
+
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
+}
+method graph_create_transfer(event, index, timestamp, special_kind) {
+    let tx_hash = event.tx_meta.hash;
+    let id = `${tx_hash}#${index}`;
+    let is_batch = false;
+    let is_mint = false;
+    let is_burn = false;
+    let batch_index;
+
+    if special_kind.starts_with("batch") {
+        is_batch = true;
+        let split = special_kind.split(":");
+        batch_index = kind[1];
+        id = `${id}#${batch_index}`;
+    }
+
+    switch special_kind {
+        "mint" => {
+            is_mint = true;
+        }
+        "burn" => {
+            is_burn = true;
+        }
+    }
+
+    this.push(
+        new Transfer id {
+            transaction: tx_hash as Transaction:Ref
+            timestamp: timestamp as BigInt
+
+            isBatch: event.is_batch
+            lbPair: event.tx_meta.address as LbPair:Ref
+            sender: event.sender as Address
+            recipient: event.receipient as Address
+            binId: event.id as BigInt
+            isMint: is_mint as Boolean
+            isBurn: is_mint as Boolean
+            isBatch: is_mint as Boolean
+            batchIndex: batch_index as BigInt
+
+            amount: event.amount as BigInt
+
+            origin: event.tx_meta.from as Address
+            logIndex: event.tx_meta.log_index as BigInt
+        }
+    );
 }
 method graph_create_tokens(token_meta_deltas) {
     let tokens = token_meta_deltas.deltas;
@@ -515,6 +741,11 @@ method graph_create_lb_pairs(lb_pairs, clock) {
         );
     }
 }
+method graph_create_swaps(pair_swaps) {
+    for swap in swaps {
+        // make swaps
+    }
+}
 method graph_create_users(unique_users) {
     let deltas = unique_users.deltas ?? [];
     for delta in deltas {
@@ -522,6 +753,57 @@ method graph_create_users(unique_users) {
         this.push(
                 update User id {
                 }
+        );
+    }
+}
+method graph_create_bin() {
+    let id = "pair#bin_id";
+    let split = id.split("#");
+    let pair = id[0];
+    this.push(
+        new Bin id {
+            binId: split[1],
+            lbPair: split[0],
+            priceX: 1 as BigDecimal
+            priceY: "69" as BigDecimal
+        }
+    );
+}
+method graph_update_bin_data(bin_reserves, bin_total_supply) {
+    let deltas = bin_reserves.deltas;
+    for delta in deltas {
+        let split = delta.key.split(":");
+        let id = split[0];
+        let token = split[1];
+
+        let value = delta.new_value;
+
+        switch token {
+            "x" => {
+                this.push(
+                    update Bin id {
+                        reserveX: value as BigInt
+                    }
+                );
+            }
+            "y" => {
+                this.push(
+                    update Bin id {
+                        reserveY: value as BigInt
+                    }
+                );
+            }
+        }
+    }
+
+    let deltas = bin_total_supply.deltas;
+    for delta in deltas {
+        let id = delta.key;
+        let value = delta.new_value;
+        this.push(
+            update Bin id {
+                totalSupply: value as BigInt
+            }
         );
     }
 }
@@ -595,14 +877,39 @@ method graph_update_token_prices(token_prices) {
         let old_value = delta.old_value;
         let value = delta.new_value;
 
+
         if old_value != value {
+            // update the token price for the LbPair
+            let price = value.usd_price;
+            this.push(
+                // if the key x is set, it's token x in the pair
+                if value.contains("x") {
+                    update LbPair value.x {
+                        tokenXPriceUSD: price as BigInt
+                    }
+                } else { // otherwise it's token y
+                    update LbPair value.y {
+                        tokenYPriceUSD: price as BigInt
+                    }
+                }
+            );
             this.push(
                 update Token id {
-                    derivedAvax: value as BigInt
+                    derivedAvax: value.native as BigInt
                 }
             );
         }
     }
+
+    if deltas.len() > 0 {
+        let id = "1";
+        this.push(
+            update Bundle id {
+                avaxPriceUSD: get_avax_price_usd() as BigInt
+            }
+        );
+    }
+
 }
 method graph_update_user_count(user_count) {
     let deltas = user_count.deltas ?? [];

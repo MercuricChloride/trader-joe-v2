@@ -1,11 +1,54 @@
+type Burn @entity {
+  id: ID!
+  timestamp: BigInt
+  amountX: BigInt
+  amountY: BigInt
+  recipient: String
+  transaction: Transaction!
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
+}
 type Token @entity {
   id: ID!
+  derivedAvax: BigInt
   name: String
   txCount: BigInt
   totalSupply: BigInt
   symbol: String
-  factory: LbFactory
+  factory: LbFactory!
   decimals: BigInt
+}
+type FlashLoan @entity {
+  id: ID!
+  timestamp: BigInt
+  fees: BigInt
+  amount: BigInt
+  recipient: String
+  transaction: Transaction!
+  token: Token!
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
+}
+type Swap @entity {
+  id: ID!
+  amountYOut: BigInt
+  activeId: BigInt
+  amountXIn: BigInt
+  timestamp: BigInt
+  amountYIn: BigInt
+  feesX: BigInt
+  feesY: BigInt
+  amountXOut: BigInt
+  recipient: String
+  transaction: Transaction!
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
 }
 type User @entity {
   id: ID!
@@ -32,13 +75,50 @@ type LbPair @entity {
   txCount: BigInt
   totalValueLockedAvax: BigInt
   reserveX: BigInt
-  tokenX: Token
+  tokenX: Token!
   reserveY: BigInt
-  tokenY: Token
+  tokenY: Token!
   tokenYAddress: String
   tokenXAddress: String
   totalValueLockedUSD: BigInt
   ignored: Boolean
+}
+type Bundle @entity {
+  id: ID!
+  avaxPriceUSD: BigInt
+}
+type Collect @entity {
+  id: ID!
+  timestamp: BigInt
+  fees: BigInt
+  amountX: BigInt
+  amountY: BigInt
+  recipient: String
+  transaction: Transaction!
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
+}
+type Transfer @entity {
+  id: ID!
+  isBatch: Boolean
+  isBurn: Boolean
+  timestamp: BigInt
+  batchIndex: BigInt
+  amount: BigInt
+  isMint: Boolean
+  recipient: String
+  transaction: Transaction!
+  binId: BigInt
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
+}
+type Factory @entity {
+  id: ID!
+  txCount: BigInt
 }
 type LbFactory @entity {
   id: ID!
@@ -58,4 +138,26 @@ type LbPairParameterSet @entity {
   decayPeriod: BigInt!
   sender: String!
   filterPeriod: BigInt!
+}
+type Bin @entity {
+  id: ID!
+  totalSupply: BigInt
+  reserveX: BigInt
+  reserveY: BigInt
+  binId: 
+  priceX: BigDecimal
+  priceY: BigDecimal
+  lbPair: 
+}
+type Mint @entity {
+  id: ID!
+  timestamp: BigInt
+  amountX: BigInt
+  amountY: BigInt
+  recipient: String
+  transaction: Transaction!
+  sender: String
+  origin: String
+  logIndex: BigInt
+  lbPair: LbPair!
 }
